@@ -1,0 +1,466 @@
+#include "raylib.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <sys/stat.h>
+
+// --- Constants ---
+#define CELL_SIZE 32
+#define CELL_GAP 2
+#define CELL_STRIDE (CELL_SIZE + CELL_GAP)
+#define PADDING 20
+#define HEADER_HEIGHT 48
+#define MAX_COLS 30
+#define MAX_ROWS 16
+#define MAX_CELLS (MAX_COLS * MAX_ROWS)
+#define MAX_LEADERBOARD 10
+#define NAME_LEN 3
+
+// --- Colors (GNOME Mines Light Theme) ---
+#define COL_WINDOW_BG    CLITERAL(Color){ 0xf6, 0xf5, 0xf4, 0xff }
+#define COL_BOARD_BG     CLITERAL(Color){ 0xe8, 0xe4, 0xe0, 0xff }
+#define COL_CELL_HIDDEN  CLITERAL(Color){ 0xf5, 0xf3, 0xf0, 0xff }
+#define COL_CELL_REVEALED CLITERAL(Color){ 0xd6, 0xd1, 0xcc, 0xff }
+#define COL_CELL_EMPTY   CLITERAL(Color){ 0xc0, 0xbb, 0xb5, 0xff }
+#define COL_HEADER_BG    CLITERAL(Color){ 0xd6, 0xd1, 0xcc, 0xff }
+#define COL_MINE_HIT     CLITERAL(Color){ 0xe0, 0x40, 0x40, 0xff }
+#define COL_TEXT         CLITERAL(Color){ 0x3d, 0x38, 0x46, 0xff }
+#define COL_TEXT_DIM     CLITERAL(Color){ 0x5e, 0x5c, 0x5a, 0xff }
+#define COL_OVERLAY      CLITERAL(Color){ 0x00, 0x00, 0x00, 0x99 }
+
+static const Color NUMBER_COLORS[9] = {
+    {0},
+    { 0x35, 0x84, 0xe4, 0xff },
+    { 0x2e, 0xc2, 0x7e, 0xff },
+    { 0xe5, 0xa5, 0x0a, 0xff },
+    { 0xc6, 0x46, 0x00, 0xff },
+    { 0xa3, 0x47, 0xba, 0xff },
+    { 0x26, 0xa2, 0x69, 0xff },
+    { 0x3d, 0x38, 0x46, 0xff },
+    { 0x9a, 0x99, 0x96, 0xff },
+};
+
+typedef enum { CELL_HIDDEN, CELL_REVEALED, CELL_FLAGGED } CellState;
+typedef enum { SCREEN_MENU, SCREEN_PLAYING, SCREEN_PAUSED, SCREEN_GAME_OVER,
+               SCREEN_GAME_WON, SCREEN_NAME_ENTRY, SCREEN_LEADERBOARD } Screen;
+typedef enum { DIFF_BEGINNER, DIFF_INTERMEDIATE, DIFF_EXPERT, DIFF_COUNT } Difficulty;
+
+typedef struct { int rows; int cols; int mines; const char *name; } DiffConfig;
+static const DiffConfig DIFFS[DIFF_COUNT] = {
+    { 9,  9,  10, "BEGINNER" },
+    { 16, 16, 40, "INTERMEDIATE" },
+    { 16, 30, 99, "EXPERT" },
+};
+
+typedef struct {
+    bool is_mine;
+    int adjacent;
+    CellState state;
+} Cell;
+
+typedef struct {
+    char name[NAME_LEN + 1];
+    int time_secs;
+} LeaderEntry;
+
+typedef struct {
+    Screen screen;
+    Difficulty difficulty;
+    Cell cells[MAX_CELLS];
+    int rows, cols, mines;
+    int flags_placed;
+    bool first_click;
+    float elapsed;
+    bool timer_running;
+    int cursor_row, cursor_col;
+    bool cursor_visible;
+    bool prev_both_down;
+    int triggered_mine;
+    char entry_name[NAME_LEN + 1];
+    int entry_len;
+    LeaderEntry leaderboard[DIFF_COUNT][MAX_LEADERBOARD];
+    int lb_count[DIFF_COUNT];
+    Difficulty lb_view_diff;
+    int win_w, win_h;
+    int board_x, board_y;
+} Game;
+
+static Game game = {0};
+
+static void calc_window_size(void) {
+    const DiffConfig *d = &DIFFS[game.difficulty];
+    game.rows = d->rows;
+    game.cols = d->cols;
+    game.mines = d->mines;
+    game.win_w = d->cols * CELL_STRIDE + 2 * PADDING;
+    game.win_h = d->rows * CELL_STRIDE + HEADER_HEIGHT + 2 * PADDING;
+    game.board_x = PADDING;
+    game.board_y = PADDING + HEADER_HEIGHT;
+}
+
+static void board_init(void) {
+    const DiffConfig *d = &DIFFS[game.difficulty];
+    game.rows = d->rows;
+    game.cols = d->cols;
+    game.mines = d->mines;
+    game.flags_placed = 0;
+    game.first_click = true;
+    game.elapsed = 0.0f;
+    game.timer_running = false;
+    game.cursor_row = 0;
+    game.cursor_col = 0;
+    game.cursor_visible = false;
+    game.prev_both_down = false;
+    game.triggered_mine = -1;
+    game.entry_len = 0;
+    memset(game.entry_name, 0, sizeof(game.entry_name));
+    for (int i = 0; i < game.rows * game.cols; i++) {
+        game.cells[i] = (Cell){0};
+    }
+}
+
+static void place_mines(int safe_row, int safe_col) {
+    int total = game.rows * game.cols;
+    int placed = 0;
+    srand((unsigned)time(NULL));
+    while (placed < game.mines) {
+        int idx = rand() % total;
+        int r = idx / game.cols;
+        int c = idx % game.cols;
+        if (game.cells[idx].is_mine) continue;
+        if (abs(r - safe_row) <= 1 && abs(c - safe_col) <= 1) continue;
+        game.cells[idx].is_mine = true;
+        placed++;
+    }
+    for (int r = 0; r < game.rows; r++) {
+        for (int c = 0; c < game.cols; c++) {
+            if (game.cells[r * game.cols + c].is_mine) continue;
+            int count = 0;
+            for (int dr = -1; dr <= 1; dr++) {
+                for (int dc = -1; dc <= 1; dc++) {
+                    int nr = r + dr, nc = c + dc;
+                    if (nr >= 0 && nr < game.rows && nc >= 0 && nc < game.cols) {
+                        if (game.cells[nr * game.cols + nc].is_mine) count++;
+                    }
+                }
+            }
+            game.cells[r * game.cols + c].adjacent = count;
+        }
+    }
+    game.first_click = false;
+}
+
+static void reveal_cell(int row, int col) {
+    int queue[MAX_CELLS];
+    int head = 0, tail = 0;
+    int idx = row * game.cols + col;
+    if (game.cells[idx].state != CELL_HIDDEN) return;
+    game.cells[idx].state = CELL_REVEALED;
+    if (game.cells[idx].is_mine) {
+        game.triggered_mine = idx;
+        return;
+    }
+    if (game.cells[idx].adjacent == 0) {
+        queue[tail++] = idx;
+    }
+    while (head < tail) {
+        int cur = queue[head++];
+        int cr = cur / game.cols, cc = cur % game.cols;
+        for (int dr = -1; dr <= 1; dr++) {
+            for (int dc = -1; dc <= 1; dc++) {
+                int nr = cr + dr, nc = cc + dc;
+                if (nr < 0 || nr >= game.rows || nc < 0 || nc >= game.cols) continue;
+                int ni = nr * game.cols + nc;
+                if (game.cells[ni].state != CELL_HIDDEN || game.cells[ni].is_mine) continue;
+                game.cells[ni].state = CELL_REVEALED;
+                if (game.cells[ni].adjacent == 0) {
+                    queue[tail++] = ni;
+                }
+            }
+        }
+    }
+}
+
+static bool check_win(void) {
+    for (int i = 0; i < game.rows * game.cols; i++) {
+        if (!game.cells[i].is_mine && game.cells[i].state != CELL_REVEALED) return false;
+    }
+    return true;
+}
+
+static void reveal_all_mines(void) {
+    for (int i = 0; i < game.rows * game.cols; i++) {
+        if (game.cells[i].is_mine) game.cells[i].state = CELL_REVEALED;
+    }
+}
+
+static void draw_cell(int row, int col) {
+    int x = game.board_x + col * CELL_STRIDE;
+    int y = game.board_y + row * CELL_STRIDE;
+    Cell *cell = &game.cells[row * game.cols + col];
+    Rectangle rect = { x, y, CELL_SIZE, CELL_SIZE };
+    float roundness = 0.15f;
+
+    switch (cell->state) {
+    case CELL_HIDDEN:
+        DrawRectangleRounded(rect, roundness, 4, COL_CELL_HIDDEN);
+        break;
+    case CELL_FLAGGED:
+        DrawRectangleRounded(rect, roundness, 4, COL_CELL_HIDDEN);
+        DrawLineEx((Vector2){x + 12, y + 6}, (Vector2){x + 12, y + 24}, 2, COL_TEXT);
+        DrawTriangle(
+            (Vector2){x + 13, y + 7},
+            (Vector2){x + 13, y + 17},
+            (Vector2){x + 24, y + 12},
+            COL_MINE_HIT
+        );
+        break;
+    case CELL_REVEALED:
+        if (cell->is_mine) {
+            int idx = row * game.cols + col;
+            Color bg = (idx == game.triggered_mine) ? COL_MINE_HIT : COL_CELL_REVEALED;
+            DrawRectangleRounded(rect, roundness, 4, bg);
+            int cx = x + CELL_SIZE / 2, cy = y + CELL_SIZE / 2;
+            DrawCircle(cx, cy, 8, COL_TEXT);
+            DrawLineEx((Vector2){cx - 10, cy}, (Vector2){cx + 10, cy}, 2, COL_TEXT);
+            DrawLineEx((Vector2){cx, cy - 10}, (Vector2){cx, cy + 10}, 2, COL_TEXT);
+            DrawLineEx((Vector2){cx - 7, cy - 7}, (Vector2){cx + 7, cy + 7}, 2, COL_TEXT);
+            DrawLineEx((Vector2){cx - 7, cy + 7}, (Vector2){cx + 7, cy - 7}, 2, COL_TEXT);
+        } else if (cell->adjacent == 0) {
+            DrawRectangleRounded(rect, roundness, 4, COL_CELL_EMPTY);
+        } else {
+            DrawRectangleRounded(rect, roundness, 4, COL_CELL_REVEALED);
+            const char *num = TextFormat("%d", cell->adjacent);
+            int fw = MeasureText(num, 20);
+            DrawText(num, x + (CELL_SIZE - fw) / 2, y + 7, 20, NUMBER_COLORS[cell->adjacent]);
+        }
+        break;
+    }
+}
+
+static void draw_board(void) {
+    DrawRectangleRounded(
+        (Rectangle){ game.board_x - 4, game.board_y - 4,
+                     game.cols * CELL_STRIDE + 6, game.rows * CELL_STRIDE + 6 },
+        0.02f, 4, COL_BOARD_BG
+    );
+    for (int r = 0; r < game.rows; r++) {
+        for (int c = 0; c < game.cols; c++) {
+            draw_cell(r, c);
+        }
+    }
+    if (game.cursor_visible) {
+        int x = game.board_x + game.cursor_col * CELL_STRIDE;
+        int y = game.board_y + game.cursor_row * CELL_STRIDE;
+        DrawRectangleRoundedLinesEx(
+            (Rectangle){ x - 1, y - 1, CELL_SIZE + 2, CELL_SIZE + 2 },
+            0.15f, 4, 2.0f, COL_TEXT
+        );
+    }
+}
+
+static void draw_header(void) {
+    Rectangle hdr = { PADDING, PADDING, game.cols * CELL_STRIDE - 2, HEADER_HEIGHT - 8 };
+    DrawRectangleRounded(hdr, 0.15f, 4, COL_HEADER_BG);
+
+    int flags_left = game.mines - game.flags_placed;
+    const char *flag_text = TextFormat("F: %d", flags_left);
+    DrawText(flag_text, PADDING + 12, PADDING + 10, 20, COL_TEXT);
+
+    const char *diff_name = DIFFS[game.difficulty].name;
+    int dw = MeasureText(diff_name, 16);
+    DrawText(diff_name, PADDING + (game.cols * CELL_STRIDE - 2 - dw) / 2, PADDING + 12, 16, COL_TEXT_DIM);
+
+    int secs = (int)game.elapsed;
+    int mins = secs / 60;
+    secs %= 60;
+    const char *time_text = TextFormat("%02d:%02d", mins, secs);
+    int tw = MeasureText(time_text, 20);
+    DrawText(time_text, PADDING + game.cols * CELL_STRIDE - 2 - tw - 12, PADDING + 10, 20, COL_TEXT);
+}
+
+static void chord_cell(int row, int col) {
+    Cell *cell = &game.cells[row * game.cols + col];
+    if (cell->state != CELL_REVEALED || cell->adjacent == 0) return;
+    int flag_count = 0;
+    for (int dr = -1; dr <= 1; dr++) {
+        for (int dc = -1; dc <= 1; dc++) {
+            int nr = row + dr, nc = col + dc;
+            if (nr < 0 || nr >= game.rows || nc < 0 || nc >= game.cols) continue;
+            if (game.cells[nr * game.cols + nc].state == CELL_FLAGGED) flag_count++;
+        }
+    }
+    if (flag_count != cell->adjacent) return;
+    bool hit_mine = false;
+    for (int dr = -1; dr <= 1; dr++) {
+        for (int dc = -1; dc <= 1; dc++) {
+            int nr = row + dr, nc = col + dc;
+            if (nr < 0 || nr >= game.rows || nc < 0 || nc >= game.cols) continue;
+            int ni = nr * game.cols + nc;
+            if (game.cells[ni].state == CELL_HIDDEN) {
+                reveal_cell(nr, nc);
+                if (game.cells[ni].is_mine) hit_mine = true;
+            }
+        }
+    }
+    if (hit_mine) {
+        reveal_all_mines();
+        game.timer_running = false;
+        game.screen = SCREEN_GAME_OVER;
+    } else if (check_win()) {
+        game.timer_running = false;
+        game.screen = SCREEN_GAME_WON;
+    }
+}
+
+static bool mouse_to_cell(int *row, int *col) {
+    int mx = GetMouseX() - game.board_x;
+    int my = GetMouseY() - game.board_y;
+    if (mx < 0 || my < 0) return false;
+    int c = mx / CELL_STRIDE;
+    int r = my / CELL_STRIDE;
+    if (c >= game.cols || r >= game.rows) return false;
+    if (mx % CELL_STRIDE >= CELL_SIZE || my % CELL_STRIDE >= CELL_SIZE) return false;
+    *row = r;
+    *col = c;
+    return true;
+}
+
+static void handle_playing_input(void) {
+    int row, col;
+
+    // Hide cursor on mouse movement
+    if (GetMouseDelta().x != 0 || GetMouseDelta().y != 0) {
+        game.cursor_visible = false;
+    }
+
+    // Left click - reveal
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        game.cursor_visible = false;
+        if (mouse_to_cell(&row, &col)) {
+            Cell *cell = &game.cells[row * game.cols + col];
+            if (cell->state == CELL_HIDDEN) {
+                if (game.first_click) {
+                    place_mines(row, col);
+                    game.timer_running = true;
+                }
+                reveal_cell(row, col);
+                if (cell->is_mine) {
+                    reveal_all_mines();
+                    game.timer_running = false;
+                    game.screen = SCREEN_GAME_OVER;
+                } else if (check_win()) {
+                    game.timer_running = false;
+                    game.screen = SCREEN_GAME_WON;
+                }
+            }
+        }
+    }
+
+    // Right click - flag
+    if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+        game.cursor_visible = false;
+        if (mouse_to_cell(&row, &col)) {
+            Cell *cell = &game.cells[row * game.cols + col];
+            if (cell->state == CELL_HIDDEN) {
+                cell->state = CELL_FLAGGED;
+                game.flags_placed++;
+            } else if (cell->state == CELL_FLAGGED) {
+                cell->state = CELL_HIDDEN;
+                game.flags_placed--;
+            }
+        }
+    }
+
+    // Middle click chord
+    if (IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE)) {
+        game.cursor_visible = false;
+        if (mouse_to_cell(&row, &col)) chord_cell(row, col);
+    }
+
+    // Left+right chord (edge-triggered)
+    bool both_down = IsMouseButtonDown(MOUSE_BUTTON_LEFT) && IsMouseButtonDown(MOUSE_BUTTON_RIGHT);
+    if (both_down && !game.prev_both_down) {
+        game.cursor_visible = false;
+        if (mouse_to_cell(&row, &col)) chord_cell(row, col);
+    }
+    game.prev_both_down = both_down;
+
+    // Arrow keys
+    if (IsKeyPressed(KEY_UP))    { game.cursor_visible = true; if (game.cursor_row > 0) game.cursor_row--; }
+    if (IsKeyPressed(KEY_DOWN))  { game.cursor_visible = true; if (game.cursor_row < game.rows - 1) game.cursor_row++; }
+    if (IsKeyPressed(KEY_LEFT))  { game.cursor_visible = true; if (game.cursor_col > 0) game.cursor_col--; }
+    if (IsKeyPressed(KEY_RIGHT)) { game.cursor_visible = true; if (game.cursor_col < game.cols - 1) game.cursor_col++; }
+
+    // Space/Enter - reveal at cursor
+    if (game.cursor_visible && (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER))) {
+        Cell *cell = &game.cells[game.cursor_row * game.cols + game.cursor_col];
+        if (cell->state == CELL_HIDDEN) {
+            if (game.first_click) {
+                place_mines(game.cursor_row, game.cursor_col);
+                game.timer_running = true;
+            }
+            reveal_cell(game.cursor_row, game.cursor_col);
+            if (cell->is_mine) {
+                reveal_all_mines();
+                game.timer_running = false;
+                game.screen = SCREEN_GAME_OVER;
+            } else if (check_win()) {
+                game.timer_running = false;
+                game.screen = SCREEN_GAME_WON;
+            }
+        }
+    }
+
+    // F - flag at cursor
+    if (game.cursor_visible && IsKeyPressed(KEY_F)) {
+        Cell *cell = &game.cells[game.cursor_row * game.cols + game.cursor_col];
+        if (cell->state == CELL_HIDDEN) {
+            cell->state = CELL_FLAGGED;
+            game.flags_placed++;
+        } else if (cell->state == CELL_FLAGGED) {
+            cell->state = CELL_HIDDEN;
+            game.flags_placed--;
+        }
+    }
+
+    // Escape - return to menu
+    if (IsKeyPressed(KEY_ESCAPE)) {
+        game.timer_running = false;
+        game.screen = SCREEN_MENU;
+    }
+}
+
+int main(void) {
+    game.difficulty = DIFF_INTERMEDIATE;
+    calc_window_size();
+
+    InitWindow(game.win_w, game.win_h, "Minesweeper");
+    SetTargetFPS(60);
+
+    board_init();
+    game.screen = SCREEN_PLAYING;
+
+    while (!WindowShouldClose()) {
+        // Timer
+        if (game.screen == SCREEN_PLAYING && game.timer_running) {
+            game.elapsed += GetFrameTime();
+        }
+
+        // Input
+        if (game.screen == SCREEN_PLAYING) handle_playing_input();
+
+        // Render
+        BeginDrawing();
+        ClearBackground(COL_WINDOW_BG);
+        if (game.screen == SCREEN_PLAYING || game.screen == SCREEN_GAME_OVER || game.screen == SCREEN_GAME_WON) {
+            draw_header();
+            draw_board();
+        }
+        EndDrawing();
+    }
+
+    CloseWindow();
+    return 0;
+}
