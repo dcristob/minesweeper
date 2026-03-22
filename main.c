@@ -231,7 +231,7 @@ static void load_leaderboard(void) {
         if (d >= DIFF_COUNT) continue;
         if (game.lb_count[d] >= MAX_LEADERBOARD) continue;
         LeaderEntry *e = &game.leaderboard[d][game.lb_count[d]++];
-        strncpy(e->name, name, NAME_LEN);
+        memcpy(e->name, name, NAME_LEN);
         e->name[NAME_LEN] = '\0';
         e->time_secs = secs;
     }
@@ -270,7 +270,7 @@ static void insert_score(Difficulty d, const char *name, int secs) {
     for (int i = game.lb_count[d] - 1; i > pos; i--) {
         game.leaderboard[d][i] = game.leaderboard[d][i - 1];
     }
-    strncpy(game.leaderboard[d][pos].name, name, NAME_LEN);
+    memcpy(game.leaderboard[d][pos].name, name, NAME_LEN);
     game.leaderboard[d][pos].name[NAME_LEN] = '\0';
     game.leaderboard[d][pos].time_secs = secs;
     save_leaderboard();
@@ -541,7 +541,7 @@ static void draw_leaderboard_screen(void) {
     for (int d = 0; d < DIFF_COUNT; d++) {
         int bx = tx + d * (tab_w + tab_gap);
         Rectangle rect = { bx, ty, tab_w, tab_h };
-        bool selected = (d == game.lb_view_diff);
+        bool selected = ((Difficulty)d == game.lb_view_diff);
         bool hover = CheckCollisionPointRec(GetMousePosition(), rect);
         Color bg = selected ? COL_TEXT : (hover ? COL_CELL_HIDDEN : COL_HEADER_BG);
         Color fg = selected ? WHITE : COL_TEXT;
