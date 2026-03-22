@@ -195,6 +195,87 @@ static void reveal_all_mines(void) {
     }
 }
 
+static const char *get_leaderboard_path(void) {
+    static char path[512];
+    const char *home = getenv("HOME");
+    snprintf(path, sizeof(path), "%s/.local/share/minesweeper/leaderboard.txt", home);
+    return path;
+}
+
+static const char *diff_str(Difficulty d) {
+    switch (d) {
+        case DIFF_BEGINNER: return "beginner";
+        case DIFF_INTERMEDIATE: return "intermediate";
+        case DIFF_EXPERT: return "expert";
+        default: return "unknown";
+    }
+}
+
+static Difficulty parse_diff(const char *s) {
+    if (strcmp(s, "beginner") == 0) return DIFF_BEGINNER;
+    if (strcmp(s, "intermediate") == 0) return DIFF_INTERMEDIATE;
+    if (strcmp(s, "expert") == 0) return DIFF_EXPERT;
+    return DIFF_COUNT;
+}
+
+static void load_leaderboard(void) {
+    for (int i = 0; i < DIFF_COUNT; i++) game.lb_count[i] = 0;
+    FILE *f = fopen(get_leaderboard_path(), "r");
+    if (!f) return;
+    char line[128];
+    while (fgets(line, sizeof(line), f)) {
+        char diff_s[32], name[8];
+        int secs;
+        if (sscanf(line, "%31[^,],%7[^,],%d", diff_s, name, &secs) != 3) continue;
+        Difficulty d = parse_diff(diff_s);
+        if (d >= DIFF_COUNT) continue;
+        if (game.lb_count[d] >= MAX_LEADERBOARD) continue;
+        LeaderEntry *e = &game.leaderboard[d][game.lb_count[d]++];
+        strncpy(e->name, name, NAME_LEN);
+        e->name[NAME_LEN] = '\0';
+        e->time_secs = secs;
+    }
+    fclose(f);
+}
+
+static void save_leaderboard(void) {
+    const char *path = get_leaderboard_path();
+    char dir[512];
+    snprintf(dir, sizeof(dir), "%s/.local/share/minesweeper", getenv("HOME"));
+    mkdir(dir, 0755);
+
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    for (int d = 0; d < DIFF_COUNT; d++) {
+        for (int i = 0; i < game.lb_count[d]; i++) {
+            fprintf(f, "%s,%s,%d\n", diff_str(d),
+                    game.leaderboard[d][i].name,
+                    game.leaderboard[d][i].time_secs);
+        }
+    }
+    fclose(f);
+}
+
+static bool is_top_score(Difficulty d, int secs) {
+    if (game.lb_count[d] < MAX_LEADERBOARD) return true;
+    return secs < game.leaderboard[d][game.lb_count[d] - 1].time_secs;
+}
+
+static void insert_score(Difficulty d, const char *name, int secs) {
+    int pos = game.lb_count[d];
+    for (int i = 0; i < game.lb_count[d]; i++) {
+        if (secs < game.leaderboard[d][i].time_secs) { pos = i; break; }
+    }
+    if (game.lb_count[d] < MAX_LEADERBOARD) game.lb_count[d]++;
+    for (int i = game.lb_count[d] - 1; i > pos; i--) {
+        game.leaderboard[d][i] = game.leaderboard[d][i - 1];
+    }
+    strncpy(game.leaderboard[d][pos].name, name, NAME_LEN);
+    game.leaderboard[d][pos].name[NAME_LEN] = '\0';
+    game.leaderboard[d][pos].time_secs = secs;
+    save_leaderboard();
+}
+
 static void draw_cell(int row, int col) {
     int x = game.board_x + col * CELL_STRIDE;
     int y = game.board_y + row * CELL_STRIDE;
@@ -346,6 +427,67 @@ static void draw_paused_overlay(void) {
     DrawText(title, (game.win_w - tw) / 2, game.win_h / 2 - 20, 40, WHITE);
 }
 
+static void draw_name_entry(void) {
+    draw_board();
+    draw_header();
+
+    DrawRectangle(0, 0, game.win_w, game.win_h, COL_OVERLAY);
+
+    const char *title = "New High Score!";
+    int tw = MeasureText(title, 32);
+    DrawText(title, (game.win_w - tw) / 2, game.win_h / 2 - 80, 32, WHITE);
+
+    int secs = (int)game.elapsed;
+    int mins = secs / 60;
+    secs %= 60;
+    const char *time_text = TextFormat("Time: %02d:%02d", mins, secs);
+    int ttw = MeasureText(time_text, 24);
+    DrawText(time_text, (game.win_w - ttw) / 2, game.win_h / 2 - 40, 24, WHITE);
+
+    const char *prompt = "Enter your name:";
+    int pw = MeasureText(prompt, 20);
+    DrawText(prompt, (game.win_w - pw) / 2, game.win_h / 2, 20, WHITE);
+
+    int box_size = 36, box_gap = 8;
+    int total_w = NAME_LEN * box_size + (NAME_LEN - 1) * box_gap;
+    int sx = (game.win_w - total_w) / 2;
+    int sy = game.win_h / 2 + 32;
+    for (int i = 0; i < NAME_LEN; i++) {
+        int bx = sx + i * (box_size + box_gap);
+        DrawRectangleRounded((Rectangle){bx, sy, box_size, box_size}, 0.2f, 4, COL_CELL_HIDDEN);
+        if (i < game.entry_len) {
+            char ch[2] = { game.entry_name[i], '\0' };
+            int cw = MeasureText(ch, 24);
+            DrawText(ch, bx + (box_size - cw) / 2, sy + 7, 24, COL_TEXT);
+        } else if (i == game.entry_len) {
+            if (((int)(GetTime() * 2)) % 2 == 0) {
+                DrawLineEx((Vector2){bx + box_size / 2 - 6, sy + box_size - 6},
+                           (Vector2){bx + box_size / 2 + 6, sy + box_size - 6}, 2, COL_TEXT);
+            }
+        }
+    }
+
+    int key = GetCharPressed();
+    while (key > 0) {
+        if (key >= 'a' && key <= 'z') key -= 32;
+        if (key >= 'A' && key <= 'Z' && game.entry_len < NAME_LEN) {
+            game.entry_name[game.entry_len++] = (char)key;
+        }
+        key = GetCharPressed();
+    }
+    if (IsKeyPressed(KEY_BACKSPACE) && game.entry_len > 0) {
+        game.entry_len--;
+        game.entry_name[game.entry_len] = '\0';
+    }
+    if (IsKeyPressed(KEY_ENTER) && game.entry_len == NAME_LEN) {
+        insert_score(game.difficulty, game.entry_name, (int)game.elapsed);
+        game.screen = SCREEN_GAME_WON;
+    }
+    if (IsKeyPressed(KEY_ESCAPE)) {
+        game.screen = SCREEN_GAME_WON;
+    }
+}
+
 static void draw_menu(void) {
     const char *title = "Minesweeper";
     int tw = MeasureText(title, 40);
@@ -387,6 +529,64 @@ static void draw_menu(void) {
     }
 }
 
+static void draw_leaderboard_screen(void) {
+    const char *title = "Leaderboard";
+    int tw = MeasureText(title, 32);
+    DrawText(title, (game.win_w - tw) / 2, 20, 32, COL_TEXT);
+
+    int tab_w = 130, tab_h = 32, tab_gap = 8;
+    int tabs_total = DIFF_COUNT * tab_w + (DIFF_COUNT - 1) * tab_gap;
+    int tx = (game.win_w - tabs_total) / 2;
+    int ty = 64;
+    for (int d = 0; d < DIFF_COUNT; d++) {
+        int bx = tx + d * (tab_w + tab_gap);
+        Rectangle rect = { bx, ty, tab_w, tab_h };
+        bool selected = (d == game.lb_view_diff);
+        bool hover = CheckCollisionPointRec(GetMousePosition(), rect);
+        Color bg = selected ? COL_TEXT : (hover ? COL_CELL_HIDDEN : COL_HEADER_BG);
+        Color fg = selected ? WHITE : COL_TEXT;
+        DrawRectangleRounded(rect, 0.3f, 4, bg);
+        int dw = MeasureText(DIFFS[d].name, 14);
+        DrawText(DIFFS[d].name, bx + (tab_w - dw) / 2, ty + 9, 14, fg);
+        if (hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            game.lb_view_diff = d;
+        }
+    }
+
+    int table_x = (game.win_w - 300) / 2;
+    int table_y = ty + tab_h + 20;
+    DrawText("Rank", table_x, table_y, 16, COL_TEXT_DIM);
+    DrawText("Name", table_x + 70, table_y, 16, COL_TEXT_DIM);
+    DrawText("Time", table_x + 200, table_y, 16, COL_TEXT_DIM);
+    table_y += 28;
+
+    Difficulty d = game.lb_view_diff;
+    for (int i = 0; i < game.lb_count[d]; i++) {
+        int secs = game.leaderboard[d][i].time_secs;
+        int mins = secs / 60;
+        secs %= 60;
+        DrawText(TextFormat("%d.", i + 1), table_x, table_y, 20, COL_TEXT);
+        DrawText(game.leaderboard[d][i].name, table_x + 70, table_y, 20, COL_TEXT);
+        DrawText(TextFormat("%02d:%02d", mins, secs), table_x + 200, table_y, 20, COL_TEXT);
+        table_y += 28;
+    }
+    if (game.lb_count[d] == 0) {
+        const char *empty = "No records yet";
+        int ew = MeasureText(empty, 18);
+        DrawText(empty, (game.win_w - ew) / 2, table_y + 20, 18, COL_TEXT_DIM);
+    }
+
+    int bw = 120, bh = 40;
+    int bx = (game.win_w - bw) / 2;
+    int by = game.win_h - 70;
+    if (draw_button("Back", bx, by, bw, bh) || IsKeyPressed(KEY_ESCAPE)) {
+        game.screen = SCREEN_MENU;
+    }
+
+    if (IsKeyPressed(KEY_LEFT) && game.lb_view_diff > 0) game.lb_view_diff--;
+    if (IsKeyPressed(KEY_RIGHT) && game.lb_view_diff < DIFF_COUNT - 1) game.lb_view_diff++;
+}
+
 static void chord_cell(int row, int col) {
     Cell *cell = &game.cells[row * game.cols + col];
     if (cell->state != CELL_REVEALED || cell->adjacent == 0) return;
@@ -417,7 +617,13 @@ static void chord_cell(int row, int col) {
         game.screen = SCREEN_GAME_OVER;
     } else if (check_win()) {
         game.timer_running = false;
-        game.screen = SCREEN_GAME_WON;
+        if (is_top_score(game.difficulty, (int)game.elapsed)) {
+            game.entry_len = 0;
+            memset(game.entry_name, 0, sizeof(game.entry_name));
+            game.screen = SCREEN_NAME_ENTRY;
+        } else {
+            game.screen = SCREEN_GAME_WON;
+        }
     }
 }
 
@@ -459,7 +665,13 @@ static void handle_playing_input(void) {
                     game.screen = SCREEN_GAME_OVER;
                 } else if (check_win()) {
                     game.timer_running = false;
-                    game.screen = SCREEN_GAME_WON;
+                    if (is_top_score(game.difficulty, (int)game.elapsed)) {
+                        game.entry_len = 0;
+                        memset(game.entry_name, 0, sizeof(game.entry_name));
+                        game.screen = SCREEN_NAME_ENTRY;
+                    } else {
+                        game.screen = SCREEN_GAME_WON;
+                    }
                 }
             }
         }
@@ -515,7 +727,13 @@ static void handle_playing_input(void) {
                 game.screen = SCREEN_GAME_OVER;
             } else if (check_win()) {
                 game.timer_running = false;
-                game.screen = SCREEN_GAME_WON;
+                if (is_top_score(game.difficulty, (int)game.elapsed)) {
+                    game.entry_len = 0;
+                    memset(game.entry_name, 0, sizeof(game.entry_name));
+                    game.screen = SCREEN_NAME_ENTRY;
+                } else {
+                    game.screen = SCREEN_GAME_WON;
+                }
             }
         }
     }
@@ -542,6 +760,7 @@ static void handle_playing_input(void) {
 int main(void) {
     game.difficulty = DIFF_INTERMEDIATE;
     calc_window_size();
+    load_leaderboard();
 
     InitWindow(game.win_w, game.win_h, "Minesweeper");
     SetTargetFPS(60);
@@ -576,8 +795,8 @@ int main(void) {
             case SCREEN_PAUSED:      draw_header(); draw_paused_overlay(); break;
             case SCREEN_GAME_OVER:   draw_header(); draw_board(); draw_game_over_overlay(); break;
             case SCREEN_GAME_WON:    draw_header(); draw_board(); draw_game_won_overlay(); break;
-            case SCREEN_NAME_ENTRY:  break;
-            case SCREEN_LEADERBOARD: break;
+            case SCREEN_NAME_ENTRY:  draw_name_entry(); break;
+            case SCREEN_LEADERBOARD: draw_leaderboard_screen(); break;
         }
         EndDrawing();
     }
