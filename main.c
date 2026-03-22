@@ -280,6 +280,113 @@ static void draw_header(void) {
     DrawText(time_text, PADDING + game.cols * CELL_STRIDE - 2 - tw - 12, PADDING + 10, 20, COL_TEXT);
 }
 
+static bool draw_button(const char *text, int x, int y, int w, int h) {
+    Rectangle rect = { x, y, w, h };
+    bool hover = CheckCollisionPointRec(GetMousePosition(), rect);
+    Color bg = hover ? COL_CELL_HIDDEN : COL_HEADER_BG;
+    DrawRectangleRounded(rect, 0.3f, 4, bg);
+    int tw = MeasureText(text, 20);
+    DrawText(text, x + (w - tw) / 2, y + (h - 20) / 2, 20, COL_TEXT);
+    return hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+}
+
+static void start_new_game(void) {
+    calc_window_size();
+    board_init();
+    game.screen = SCREEN_PLAYING;
+}
+
+static void draw_game_over_overlay(void) {
+    DrawRectangle(0, 0, game.win_w, game.win_h, COL_OVERLAY);
+    const char *title = "Game Over";
+    int tw = MeasureText(title, 40);
+    DrawText(title, (game.win_w - tw) / 2, game.win_h / 2 - 60, 40, WHITE);
+
+    int bw = 140, bh = 40, gap = 20;
+    int bx = (game.win_w - bw * 2 - gap) / 2;
+    int by = game.win_h / 2 + 10;
+
+    if (draw_button("New Game", bx, by, bw, bh) || IsKeyPressed(KEY_ENTER)) {
+        start_new_game();
+    }
+    if (draw_button("Menu", bx + bw + gap, by, bw, bh) || IsKeyPressed(KEY_ESCAPE)) {
+        game.screen = SCREEN_MENU;
+    }
+}
+
+static void draw_game_won_overlay(void) {
+    DrawRectangle(0, 0, game.win_w, game.win_h, COL_OVERLAY);
+    const char *title = "You Win!";
+    int tw = MeasureText(title, 40);
+    DrawText(title, (game.win_w - tw) / 2, game.win_h / 2 - 80, 40, WHITE);
+
+    int secs = (int)game.elapsed;
+    int mins = secs / 60;
+    secs %= 60;
+    const char *time_text = TextFormat("Time: %02d:%02d", mins, secs);
+    int ttw = MeasureText(time_text, 24);
+    DrawText(time_text, (game.win_w - ttw) / 2, game.win_h / 2 - 30, 24, WHITE);
+
+    int bw = 140, bh = 40, gap = 20;
+    int bx = (game.win_w - bw * 2 - gap) / 2;
+    int by = game.win_h / 2 + 20;
+
+    if (draw_button("New Game", bx, by, bw, bh) || IsKeyPressed(KEY_ENTER)) {
+        start_new_game();
+    }
+    if (draw_button("Menu", bx + bw + gap, by, bw, bh) || IsKeyPressed(KEY_ESCAPE)) {
+        game.screen = SCREEN_MENU;
+    }
+}
+
+static void draw_paused_overlay(void) {
+    DrawRectangle(0, 0, game.win_w, game.win_h, COL_OVERLAY);
+    const char *title = "Paused";
+    int tw = MeasureText(title, 40);
+    DrawText(title, (game.win_w - tw) / 2, game.win_h / 2 - 20, 40, WHITE);
+}
+
+static void draw_menu(void) {
+    const char *title = "Minesweeper";
+    int tw = MeasureText(title, 40);
+    DrawText(title, (game.win_w - tw) / 2, 60, 40, COL_TEXT);
+
+    int bw = 200, bh = 44, gap = 12;
+    int bx = (game.win_w - bw) / 2;
+    int by = 140;
+
+    if (draw_button("Beginner (9x9)", bx, by, bw, bh)) {
+        game.difficulty = DIFF_BEGINNER;
+        calc_window_size();
+        SetWindowSize(game.win_w, game.win_h);
+        start_new_game();
+    }
+    by += bh + gap;
+    if (draw_button("Intermediate (16x16)", bx, by, bw, bh)) {
+        game.difficulty = DIFF_INTERMEDIATE;
+        calc_window_size();
+        SetWindowSize(game.win_w, game.win_h);
+        start_new_game();
+    }
+    by += bh + gap;
+    if (draw_button("Expert (30x16)", bx, by, bw, bh)) {
+        game.difficulty = DIFF_EXPERT;
+        calc_window_size();
+        SetWindowSize(game.win_w, game.win_h);
+        start_new_game();
+    }
+    by += bh + gap + 12;
+    if (draw_button("Leaderboard", bx, by, bw, bh)) {
+        game.lb_view_diff = game.difficulty;
+        game.screen = SCREEN_LEADERBOARD;
+    }
+    by += bh + gap;
+    if (draw_button("Quit", bx, by, bw, bh) || IsKeyPressed(KEY_ESCAPE)) {
+        CloseWindow();
+        exit(0);
+    }
+}
+
 static void chord_cell(int row, int col) {
     Cell *cell = &game.cells[row * game.cols + col];
     if (cell->state != CELL_REVEALED || cell->adjacent == 0) return;
@@ -439,10 +546,19 @@ int main(void) {
     InitWindow(game.win_w, game.win_h, "Minesweeper");
     SetTargetFPS(60);
 
-    board_init();
-    game.screen = SCREEN_PLAYING;
+    game.screen = SCREEN_MENU;
 
     while (!WindowShouldClose()) {
+        // Auto-pause check
+        if (game.screen == SCREEN_PLAYING && !IsWindowFocused()) {
+            game.timer_running = false;
+            game.screen = SCREEN_PAUSED;
+        }
+        if (game.screen == SCREEN_PAUSED && IsWindowFocused()) {
+            if (!game.first_click) game.timer_running = true;
+            game.screen = SCREEN_PLAYING;
+        }
+
         // Timer
         if (game.screen == SCREEN_PLAYING && game.timer_running) {
             game.elapsed += GetFrameTime();
@@ -454,9 +570,14 @@ int main(void) {
         // Render
         BeginDrawing();
         ClearBackground(COL_WINDOW_BG);
-        if (game.screen == SCREEN_PLAYING || game.screen == SCREEN_GAME_OVER || game.screen == SCREEN_GAME_WON) {
-            draw_header();
-            draw_board();
+        switch (game.screen) {
+            case SCREEN_MENU:        draw_menu(); break;
+            case SCREEN_PLAYING:     draw_header(); draw_board(); break;
+            case SCREEN_PAUSED:      draw_header(); draw_paused_overlay(); break;
+            case SCREEN_GAME_OVER:   draw_header(); draw_board(); draw_game_over_overlay(); break;
+            case SCREEN_GAME_WON:    draw_header(); draw_board(); draw_game_won_overlay(); break;
+            case SCREEN_NAME_ENTRY:  break;
+            case SCREEN_LEADERBOARD: break;
         }
         EndDrawing();
     }
