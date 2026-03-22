@@ -123,7 +123,6 @@ static void board_init(void) {
 static void place_mines(int safe_row, int safe_col) {
     int total = game.rows * game.cols;
     int placed = 0;
-    srand((unsigned)time(NULL));
     while (placed < game.mines) {
         int idx = rand() % total;
         int r = idx / game.cols;
@@ -648,8 +647,8 @@ static void handle_playing_input(void) {
         game.cursor_visible = false;
     }
 
-    // Left click - reveal
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+    // Left click - reveal (suppress if right button also down for chord)
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
         game.cursor_visible = false;
         if (mouse_to_cell(&row, &col)) {
             Cell *cell = &game.cells[row * game.cols + col];
@@ -762,7 +761,9 @@ int main(void) {
     calc_window_size();
     load_leaderboard();
 
+    srand((unsigned)time(NULL));
     InitWindow(game.win_w, game.win_h, "Minesweeper");
+    SetExitKey(0);
     SetTargetFPS(60);
 
     game.screen = SCREEN_MENU;
