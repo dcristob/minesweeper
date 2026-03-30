@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Background rounded square -->
+  <rect x="8" y="8" width="112" height="112" rx="20" fill="#e8e4e0"/>
+  <!-- 3x3 grid of cells -->
+  <!-- Row 1 -->
+  <rect x="16" y="16" width="28" height="28" rx="4" fill="#c0c0c0"/>
+  <rect x="50" y="16" width="28" height="28" rx="4" fill="#c0c0c0"/>
+  <rect x="84" y="16" width="28" height="28" rx="4" fill="#d6d1cc"/>
+  <text x="98" y="37" font-family="sans-serif" font-weight="bold" font-size="20" fill="#3584e4" text-anchor="middle">1</text>
+  <!-- Row 2 -->
+  <rect x="16" y="50" width="28" height="28" rx="4" fill="#c0c0c0"/>
+  <rect x="50" y="50" width="28" height="28" rx="4" fill="#d6d1cc"/>
+  <text x="64" y="71" font-family="sans-serif" font-weight="bold" font-size="20" fill="#2ec27e" text-anchor="middle">2</text>
+  <rect x="84" y="50" width="28" height="28" rx="4" fill="#d6d1cc"/>
+  <text x="98" y="71" font-family="sans-serif" font-weight="bold" font-size="20" fill="#3584e4" text-anchor="middle">1</text>
+  <!-- Row 3 -->
+  <rect x="16" y="84" width="28" height="28" rx="4" fill="#c0c0c0"/>
+  <!-- Flag on bottom-left cell -->
+  <line x1="26" y1="90" x2="26" y2="106" stroke="#3d3846" stroke-width="2"/>
+  <polygon points="27,91 27,99 37,95" fill="#e04040"/>
+  <rect x="50" y="84" width="28" height="28" rx="4" fill="#d6d1cc"/>
+  <text x="64" y="105" font-family="sans-serif" font-weight="bold" font-size="20" fill="#3584e4" text-anchor="middle">1</text>
+  <rect x="84" y="84" width="28" height="28" rx="4" fill="#ffffff"/>
+</svg>

@@ -672,6 +672,8 @@ static void handle_playing_input(void) {
                         game.screen = SCREEN_GAME_WON;
                     }
                 }
+            } else if (cell->state == CELL_REVEALED) {
+                chord_cell(row, col);
             }
         }
     }
@@ -734,6 +736,8 @@ static void handle_playing_input(void) {
                     game.screen = SCREEN_GAME_WON;
                 }
             }
+        } else if (cell->state == CELL_REVEALED) {
+            chord_cell(game.cursor_row, game.cursor_col);
         }
     }
 
