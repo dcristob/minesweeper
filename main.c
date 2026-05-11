@@ -767,6 +767,7 @@ int main(void) {
 
     srand((unsigned)time(NULL));
     InitWindow(game.win_w, game.win_h, "Minesweeper");
+    SetMouseCursor(MOUSE_CURSOR_ARROW);
     SetExitKey(0);
     SetTargetFPS(60);
 
