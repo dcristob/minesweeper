@@ -23,18 +23,23 @@ Requires [Raylib](https://www.raylib.com/) installed on your system.
 sudo pacman -S raylib
 ```
 
-### User install (recommended)
-
-No root required. Installs to `~/.local`:
+### One-liner (recommended)
 
 ```bash
-./install.sh
+curl -sL https://raw.githubusercontent.com/dcristob/minesweeper/main/remote-install.sh | bash
 ```
 
-### System-wide install
+System-wide:
 
 ```bash
-sudo ./install.sh --system
+curl -sL https://raw.githubusercontent.com/dcristob/minesweeper/main/remote-install.sh | sudo bash -s --system
+```
+
+### From a cloned repo
+
+```bash
+./install.sh              # user install to ~/.local
+sudo ./install.sh --system  # system-wide to /usr
 ```
 
 ### Uninstall
@@ -43,6 +48,8 @@ sudo ./install.sh --system
 ./install.sh --uninstall
 # Or for system-wide:
 sudo ./install.sh --system --uninstall
+# Or via curl:
+curl -sL https://raw.githubusercontent.com/dcristob/minesweeper/main/remote-install.sh | bash -s --uninstall
 ```
 
 ### Build from source
