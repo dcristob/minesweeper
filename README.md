@@ -14,18 +14,41 @@ A lightweight Minesweeper clone for Linux built with C and [Raylib](https://www.
 - Safe first click with flood-fill reveal
 - ~30KB binary, single source file
 
-## Build
+## Install
 
 Requires [Raylib](https://www.raylib.com/) installed on your system.
 
 ```bash
 # Arch Linux
 sudo pacman -S raylib
+```
 
-# Build
+### User install (recommended)
+
+No root required. Installs to `~/.local`:
+
+```bash
+./install.sh
+```
+
+### System-wide install
+
+```bash
+sudo ./install.sh --system
+```
+
+### Uninstall
+
+```bash
+./install.sh --uninstall
+# Or for system-wide:
+sudo ./install.sh --system --uninstall
+```
+
+### Build from source
+
+```bash
 make
-
-# Run
 ./minesweeper
 ```
 
