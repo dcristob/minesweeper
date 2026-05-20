@@ -5,19 +5,17 @@
 #include <time.h>
 #include <sys/stat.h>
 
-// --- Constants ---
-#define CELL_SIZE 32
-#define CELL_GAP 2
-#define CELL_STRIDE (CELL_SIZE + CELL_GAP)
-#define PADDING 20
-#define HEADER_HEIGHT 48
+#define BASE_CELL_SIZE 32
+#define BASE_CELL_GAP 2
+#define BASE_CELL_STRIDE (BASE_CELL_SIZE + BASE_CELL_GAP)
+#define BASE_PADDING 20
+#define BASE_HEADER_HEIGHT 48
 #define MAX_COLS 30
 #define MAX_ROWS 16
 #define MAX_CELLS (MAX_COLS * MAX_ROWS)
 #define MAX_LEADERBOARD 10
 #define NAME_LEN 3
 
-// --- Colors (GNOME Mines Light Theme) ---
 #define COL_WINDOW_BG    CLITERAL(Color){ 0xf6, 0xf5, 0xf4, 0xff }
 #define COL_BOARD_BG     CLITERAL(Color){ 0xe8, 0xe4, 0xe0, 0xff }
 #define COL_CELL_HIDDEN  CLITERAL(Color){ 0xc0, 0xc0, 0xc0, 0xff }
@@ -84,6 +82,9 @@ typedef struct {
     Difficulty lb_view_diff;
     int win_w, win_h;
     int board_x, board_y;
+    float scale;
+    float offset_x, offset_y;
+    int min_win_w, min_win_h;
 } Game;
 
 static Game game = {0};
@@ -93,10 +94,33 @@ static void calc_window_size(void) {
     game.rows = d->rows;
     game.cols = d->cols;
     game.mines = d->mines;
-    game.win_w = d->cols * CELL_STRIDE + 2 * PADDING;
-    game.win_h = d->rows * CELL_STRIDE + HEADER_HEIGHT + 2 * PADDING;
-    game.board_x = PADDING;
-    game.board_y = PADDING + HEADER_HEIGHT;
+    game.min_win_w = d->cols * BASE_CELL_STRIDE + 2 * BASE_PADDING;
+    game.min_win_h = d->rows * BASE_CELL_STRIDE + BASE_HEADER_HEIGHT + 2 * BASE_PADDING;
+    game.win_w = game.min_win_w;
+    game.win_h = game.min_win_h;
+    game.scale = 1.0f;
+    game.offset_x = 0.0f;
+    game.offset_y = 0.0f;
+    game.board_x = BASE_PADDING;
+    game.board_y = BASE_PADDING + BASE_HEADER_HEIGHT;
+}
+
+static void update_layout(void) {
+    int sw = GetScreenWidth();
+    int sh = GetScreenHeight();
+    if (game.min_win_w <= 0 || game.min_win_h <= 0) return;
+    float sx = (float)sw / game.min_win_w;
+    float sy = (float)sh / game.min_win_h;
+    game.scale = (sx < sy) ? sx : sy;
+    if (game.scale < 1.0f) game.scale = 1.0f;
+    float content_w = game.min_win_w * game.scale;
+    float content_h = game.min_win_h * game.scale;
+    game.offset_x = (sw - content_w) / 2.0f;
+    game.offset_y = (sh - content_h) / 2.0f;
+    game.board_x = (int)(game.offset_x + BASE_PADDING * game.scale);
+    game.board_y = (int)(game.offset_y + (BASE_PADDING + BASE_HEADER_HEIGHT) * game.scale);
+    game.win_w = sw;
+    game.win_h = sh;
 }
 
 static void board_init(void) {
@@ -276,10 +300,12 @@ static void insert_score(Difficulty d, const char *name, int secs) {
 }
 
 static void draw_cell(int row, int col) {
-    int x = game.board_x + col * CELL_STRIDE;
-    int y = game.board_y + row * CELL_STRIDE;
+    float s = game.scale;
+    float x = game.board_x + col * BASE_CELL_STRIDE * s;
+    float y = game.board_y + row * BASE_CELL_STRIDE * s;
+    float cs = BASE_CELL_SIZE * s;
     Cell *cell = &game.cells[row * game.cols + col];
-    Rectangle rect = { x, y, CELL_SIZE, CELL_SIZE };
+    Rectangle rect = { x, y, cs, cs };
     float roundness = 0.15f;
 
     switch (cell->state) {
@@ -288,11 +314,11 @@ static void draw_cell(int row, int col) {
         break;
     case CELL_FLAGGED:
         DrawRectangleRounded(rect, roundness, 4, COL_CELL_HIDDEN);
-        DrawLineEx((Vector2){x + 12, y + 6}, (Vector2){x + 12, y + 24}, 2, COL_TEXT);
+        DrawLineEx((Vector2){x + 12*s, y + 6*s}, (Vector2){x + 12*s, y + 24*s}, 2*s, COL_TEXT);
         DrawTriangle(
-            (Vector2){x + 13, y + 7},
-            (Vector2){x + 13, y + 17},
-            (Vector2){x + 24, y + 12},
+            (Vector2){x + 13*s, y + 7*s},
+            (Vector2){x + 13*s, y + 17*s},
+            (Vector2){x + 24*s, y + 12*s},
             COL_MINE_HIT
         );
         break;
@@ -301,28 +327,32 @@ static void draw_cell(int row, int col) {
             int idx = row * game.cols + col;
             Color bg = (idx == game.triggered_mine) ? COL_MINE_HIT : COL_CELL_REVEALED;
             DrawRectangleRounded(rect, roundness, 4, bg);
-            int cx = x + CELL_SIZE / 2, cy = y + CELL_SIZE / 2;
-            DrawCircle(cx, cy, 8, COL_TEXT);
-            DrawLineEx((Vector2){cx - 10, cy}, (Vector2){cx + 10, cy}, 2, COL_TEXT);
-            DrawLineEx((Vector2){cx, cy - 10}, (Vector2){cx, cy + 10}, 2, COL_TEXT);
-            DrawLineEx((Vector2){cx - 7, cy - 7}, (Vector2){cx + 7, cy + 7}, 2, COL_TEXT);
-            DrawLineEx((Vector2){cx - 7, cy + 7}, (Vector2){cx + 7, cy - 7}, 2, COL_TEXT);
+            float cx = x + cs / 2, cy = y + cs / 2;
+            DrawCircle((int)cx, (int)cy, 8*s, COL_TEXT);
+            DrawLineEx((Vector2){cx - 10*s, cy}, (Vector2){cx + 10*s, cy}, 2*s, COL_TEXT);
+            DrawLineEx((Vector2){cx, cy - 10*s}, (Vector2){cx, cy + 10*s}, 2*s, COL_TEXT);
+            DrawLineEx((Vector2){cx - 7*s, cy - 7*s}, (Vector2){cx + 7*s, cy + 7*s}, 2*s, COL_TEXT);
+            DrawLineEx((Vector2){cx - 7*s, cy + 7*s}, (Vector2){cx + 7*s, cy - 7*s}, 2*s, COL_TEXT);
         } else if (cell->adjacent == 0) {
             DrawRectangleRounded(rect, roundness, 4, COL_CELL_EMPTY);
         } else {
             DrawRectangleRounded(rect, roundness, 4, COL_CELL_REVEALED);
             const char *num = TextFormat("%d", cell->adjacent);
-            int fw = MeasureText(num, 20);
-            DrawText(num, x + (CELL_SIZE - fw) / 2, y + 7, 20, NUMBER_COLORS[cell->adjacent]);
+            int fs = (int)(20 * s);
+            if (fs < 6) fs = 6;
+            int fw = MeasureText(num, fs);
+            DrawText(num, (int)(x + (cs - fw) / 2), (int)(y + 7*s), fs, NUMBER_COLORS[cell->adjacent]);
         }
         break;
     }
 }
 
 static void draw_board(void) {
+    float s = game.scale;
     DrawRectangleRounded(
-        (Rectangle){ game.board_x - 4, game.board_y - 4,
-                     game.cols * CELL_STRIDE + 6, game.rows * CELL_STRIDE + 6 },
+        (Rectangle){ game.board_x - 4*s, game.board_y - 4*s,
+                     game.cols * BASE_CELL_STRIDE * s + 6*s,
+                     game.rows * BASE_CELL_STRIDE * s + 6*s },
         0.02f, 4, COL_BOARD_BG
     );
     for (int r = 0; r < game.rows; r++) {
@@ -331,137 +361,183 @@ static void draw_board(void) {
         }
     }
     if (game.cursor_visible) {
-        int x = game.board_x + game.cursor_col * CELL_STRIDE;
-        int y = game.board_y + game.cursor_row * CELL_STRIDE;
+        float x = game.board_x + game.cursor_col * BASE_CELL_STRIDE * s;
+        float y = game.board_y + game.cursor_row * BASE_CELL_STRIDE * s;
+        float cs = BASE_CELL_SIZE * s;
         DrawRectangleRoundedLinesEx(
-            (Rectangle){ x - 1, y - 1, CELL_SIZE + 2, CELL_SIZE + 2 },
-            0.15f, 4, 2.0f, COL_TEXT
+            (Rectangle){ x - 1*s, y - 1*s, cs + 2*s, cs + 2*s },
+            0.15f, 4, 2.0f*s, COL_TEXT
         );
     }
 }
 
 static void draw_header(void) {
-    Rectangle hdr = { PADDING, PADDING, game.cols * CELL_STRIDE - 2, HEADER_HEIGHT - 8 };
+    float s = game.scale;
+    float hx = game.offset_x + BASE_PADDING * s;
+    float hy = game.offset_y + BASE_PADDING * s;
+    float hw = game.cols * BASE_CELL_STRIDE * s - 2*s;
+    float hh = (BASE_HEADER_HEIGHT - 8) * s;
+    Rectangle hdr = { hx, hy, hw, hh };
     DrawRectangleRounded(hdr, 0.15f, 4, COL_HEADER_BG);
 
+    int fs = (int)(20 * s);
+    if (fs < 6) fs = 6;
     int flags_left = game.mines - game.flags_placed;
     const char *flag_text = TextFormat("F: %d", flags_left);
-    DrawText(flag_text, PADDING + 12, PADDING + 10, 20, COL_TEXT);
+    DrawText(flag_text, (int)(hx + 12*s), (int)(hy + 10*s), fs, COL_TEXT);
 
+    int fs2 = (int)(16 * s);
+    if (fs2 < 6) fs2 = 6;
     const char *diff_name = DIFFS[game.difficulty].name;
-    int dw = MeasureText(diff_name, 16);
-    DrawText(diff_name, PADDING + (game.cols * CELL_STRIDE - 2 - dw) / 2, PADDING + 12, 16, COL_TEXT_DIM);
+    int dw = MeasureText(diff_name, fs2);
+    DrawText(diff_name, (int)(hx + (hw - dw) / 2), (int)(hy + 12*s), fs2, COL_TEXT_DIM);
 
     int secs = (int)game.elapsed;
     int mins = secs / 60;
     secs %= 60;
     const char *time_text = TextFormat("%02d:%02d", mins, secs);
-    int tw = MeasureText(time_text, 20);
-    DrawText(time_text, PADDING + game.cols * CELL_STRIDE - 2 - tw - 12, PADDING + 10, 20, COL_TEXT);
+    int tw = MeasureText(time_text, fs);
+    DrawText(time_text, (int)(hx + hw - tw - 12*s), (int)(hy + 10*s), fs, COL_TEXT);
 }
 
-static bool draw_button(const char *text, int x, int y, int w, int h) {
+static bool draw_button(const char *text, float x, float y, float w, float h, int fs) {
     Rectangle rect = { x, y, w, h };
     bool hover = CheckCollisionPointRec(GetMousePosition(), rect);
     Color bg = hover ? COL_CELL_HIDDEN : COL_HEADER_BG;
     DrawRectangleRounded(rect, 0.3f, 4, bg);
-    int tw = MeasureText(text, 20);
-    DrawText(text, x + (w - tw) / 2, y + (h - 20) / 2, 20, COL_TEXT);
+    int tw = MeasureText(text, fs);
+    DrawText(text, (int)(x + (w - tw) / 2), (int)(y + (h - fs) / 2), fs, COL_TEXT);
     return hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
 }
 
-static void start_new_game(void) {
+static void start_new_game(bool reset_size) {
     calc_window_size();
     board_init();
+    if (reset_size) {
+        SetWindowSize(game.win_w, game.win_h);
+    }
+    SetWindowMinSize(game.min_win_w, game.min_win_h);
     game.screen = SCREEN_PLAYING;
 }
 
+static void go_to_menu(void) {
+    calc_window_size();
+    game.screen = SCREEN_MENU;
+}
+
 static void draw_game_over_overlay(void) {
-    DrawRectangle(0, 0, game.win_w, game.win_h, COL_OVERLAY);
+    float s = game.scale;
+    int sw = GetScreenWidth(), sh = GetScreenHeight();
+    DrawRectangle(0, 0, sw, sh, COL_OVERLAY);
+
+    int fs40 = (int)(40 * s);
+    if (fs40 < 12) fs40 = 12;
     const char *title = "Game Over";
-    int tw = MeasureText(title, 40);
-    DrawText(title, (game.win_w - tw) / 2, game.win_h / 2 - 60, 40, WHITE);
+    int tw = MeasureText(title, fs40);
+    DrawText(title, (sw - tw) / 2, sh / 2 - (int)(60 * s), fs40, WHITE);
 
-    int bw = 140, bh = 40, gap = 20;
-    int bx = (game.win_w - bw * 2 - gap) / 2;
-    int by = game.win_h / 2 + 10;
+    int fs = (int)(20 * s);
+    if (fs < 8) fs = 8;
+    float bw = 140 * s, bh = 40 * s, gap = 20 * s;
+    float bx = (sw - bw * 2 - gap) / 2;
+    float by = sh / 2 + (int)(10 * s);
 
-    if (draw_button("New Game", bx, by, bw, bh) || IsKeyPressed(KEY_ENTER)) {
-        start_new_game();
+    if (draw_button("New Game", bx, by, bw, bh, fs) || IsKeyPressed(KEY_ENTER)) {
+        start_new_game(false);
     }
-    if (draw_button("Menu", bx + bw + gap, by, bw, bh) || IsKeyPressed(KEY_ESCAPE)) {
-        game.screen = SCREEN_MENU;
+    if (draw_button("Menu", bx + bw + gap, by, bw, bh, fs) || IsKeyPressed(KEY_ESCAPE)) {
+        go_to_menu();
     }
 }
 
 static void draw_game_won_overlay(void) {
-    DrawRectangle(0, 0, game.win_w, game.win_h, COL_OVERLAY);
-    const char *title = "You Win!";
-    int tw = MeasureText(title, 40);
-    DrawText(title, (game.win_w - tw) / 2, game.win_h / 2 - 80, 40, WHITE);
+    float s = game.scale;
+    int sw = GetScreenWidth(), sh = GetScreenHeight();
+    DrawRectangle(0, 0, sw, sh, COL_OVERLAY);
 
+    int fs40 = (int)(40 * s);
+    if (fs40 < 12) fs40 = 12;
+    const char *title = "You Win!";
+    int tw = MeasureText(title, fs40);
+    DrawText(title, (sw - tw) / 2, sh / 2 - (int)(80 * s), fs40, WHITE);
+
+    int fs24 = (int)(24 * s);
+    if (fs24 < 8) fs24 = 8;
     int secs = (int)game.elapsed;
     int mins = secs / 60;
     secs %= 60;
     const char *time_text = TextFormat("Time: %02d:%02d", mins, secs);
-    int ttw = MeasureText(time_text, 24);
-    DrawText(time_text, (game.win_w - ttw) / 2, game.win_h / 2 - 30, 24, WHITE);
+    int ttw = MeasureText(time_text, fs24);
+    DrawText(time_text, (sw - ttw) / 2, sh / 2 - (int)(30 * s), fs24, WHITE);
 
-    int bw = 140, bh = 40, gap = 20;
-    int bx = (game.win_w - bw * 2 - gap) / 2;
-    int by = game.win_h / 2 + 20;
+    int fs = (int)(20 * s);
+    if (fs < 8) fs = 8;
+    float bw = 140 * s, bh = 40 * s, gap = 20 * s;
+    float bx = (sw - bw * 2 - gap) / 2;
+    float by = sh / 2 + (int)(20 * s);
 
-    if (draw_button("New Game", bx, by, bw, bh) || IsKeyPressed(KEY_ENTER)) {
-        start_new_game();
+    if (draw_button("New Game", bx, by, bw, bh, fs) || IsKeyPressed(KEY_ENTER)) {
+        start_new_game(false);
     }
-    if (draw_button("Menu", bx + bw + gap, by, bw, bh) || IsKeyPressed(KEY_ESCAPE)) {
-        game.screen = SCREEN_MENU;
+    if (draw_button("Menu", bx + bw + gap, by, bw, bh, fs) || IsKeyPressed(KEY_ESCAPE)) {
+        go_to_menu();
     }
 }
 
 static void draw_paused_overlay(void) {
-    DrawRectangle(0, 0, game.win_w, game.win_h, COL_OVERLAY);
+    int sw = GetScreenWidth(), sh = GetScreenHeight();
+    DrawRectangle(0, 0, sw, sh, COL_OVERLAY);
+    int fs = (int)(40 * game.scale);
+    if (fs < 12) fs = 12;
     const char *title = "Paused";
-    int tw = MeasureText(title, 40);
-    DrawText(title, (game.win_w - tw) / 2, game.win_h / 2 - 20, 40, WHITE);
+    int tw = MeasureText(title, fs);
+    DrawText(title, (sw - tw) / 2, sh / 2 - (int)(20 * game.scale), fs, WHITE);
 }
 
 static void draw_name_entry(void) {
     draw_board();
     draw_header();
 
-    DrawRectangle(0, 0, game.win_w, game.win_h, COL_OVERLAY);
+    float s = game.scale;
+    int sw = GetScreenWidth(), sh = GetScreenHeight();
+    DrawRectangle(0, 0, sw, sh, COL_OVERLAY);
 
+    int fs32 = (int)(32 * s);
+    if (fs32 < 10) fs32 = 10;
     const char *title = "New High Score!";
-    int tw = MeasureText(title, 32);
-    DrawText(title, (game.win_w - tw) / 2, game.win_h / 2 - 80, 32, WHITE);
+    int tw = MeasureText(title, fs32);
+    DrawText(title, (sw - tw) / 2, sh / 2 - (int)(80 * s), fs32, WHITE);
 
+    int fs24 = (int)(24 * s);
+    if (fs24 < 8) fs24 = 8;
     int secs = (int)game.elapsed;
     int mins = secs / 60;
     secs %= 60;
     const char *time_text = TextFormat("Time: %02d:%02d", mins, secs);
-    int ttw = MeasureText(time_text, 24);
-    DrawText(time_text, (game.win_w - ttw) / 2, game.win_h / 2 - 40, 24, WHITE);
+    int ttw = MeasureText(time_text, fs24);
+    DrawText(time_text, (sw - ttw) / 2, sh / 2 - (int)(40 * s), fs24, WHITE);
 
+    int fs20 = (int)(20 * s);
+    if (fs20 < 6) fs20 = 6;
     const char *prompt = "Enter your name:";
-    int pw = MeasureText(prompt, 20);
-    DrawText(prompt, (game.win_w - pw) / 2, game.win_h / 2, 20, WHITE);
+    int pw = MeasureText(prompt, fs20);
+    DrawText(prompt, (sw - pw) / 2, sh / 2, fs20, WHITE);
 
-    int box_size = 36, box_gap = 8;
-    int total_w = NAME_LEN * box_size + (NAME_LEN - 1) * box_gap;
-    int sx = (game.win_w - total_w) / 2;
-    int sy = game.win_h / 2 + 32;
+    float box_size = 36 * s, box_gap = 8 * s;
+    float total_w = NAME_LEN * box_size + (NAME_LEN - 1) * box_gap;
+    float sx = (sw - total_w) / 2;
+    float sy = sh / 2 + 32 * s;
     for (int i = 0; i < NAME_LEN; i++) {
-        int bx = sx + i * (box_size + box_gap);
+        float bx = sx + i * (box_size + box_gap);
         DrawRectangleRounded((Rectangle){bx, sy, box_size, box_size}, 0.2f, 4, COL_CELL_HIDDEN);
         if (i < game.entry_len) {
             char ch[2] = { game.entry_name[i], '\0' };
-            int cw = MeasureText(ch, 24);
-            DrawText(ch, bx + (box_size - cw) / 2, sy + 7, 24, COL_TEXT);
+            int cw = MeasureText(ch, fs24);
+            DrawText(ch, (int)(bx + (box_size - cw) / 2), (int)(sy + 7*s), fs24, COL_TEXT);
         } else if (i == game.entry_len) {
             if (((int)(GetTime() * 2)) % 2 == 0) {
-                DrawLineEx((Vector2){bx + box_size / 2 - 6, sy + box_size - 6},
-                           (Vector2){bx + box_size / 2 + 6, sy + box_size - 6}, 2, COL_TEXT);
+                DrawLineEx((Vector2){bx + box_size / 2 - 6*s, sy + box_size - 6*s},
+                           (Vector2){bx + box_size / 2 + 6*s, sy + box_size - 6*s}, 2*s, COL_TEXT);
             }
         }
     }
@@ -496,33 +572,27 @@ static void draw_menu(void) {
     int bx = (game.win_w - bw) / 2;
     int by = 140;
 
-    if (draw_button("Beginner (9x9)", bx, by, bw, bh)) {
+    if (draw_button("Beginner (9x9)", bx, by, bw, bh, 20)) {
         game.difficulty = DIFF_BEGINNER;
-        calc_window_size();
-        SetWindowSize(game.win_w, game.win_h);
-        start_new_game();
+        start_new_game(true);
     }
     by += bh + gap;
-    if (draw_button("Intermediate (16x16)", bx, by, bw, bh)) {
+    if (draw_button("Intermediate (16x16)", bx, by, bw, bh, 20)) {
         game.difficulty = DIFF_INTERMEDIATE;
-        calc_window_size();
-        SetWindowSize(game.win_w, game.win_h);
-        start_new_game();
+        start_new_game(true);
     }
     by += bh + gap;
-    if (draw_button("Expert (30x16)", bx, by, bw, bh)) {
+    if (draw_button("Expert (30x16)", bx, by, bw, bh, 20)) {
         game.difficulty = DIFF_EXPERT;
-        calc_window_size();
-        SetWindowSize(game.win_w, game.win_h);
-        start_new_game();
+        start_new_game(true);
     }
     by += bh + gap + 12;
-    if (draw_button("Leaderboard", bx, by, bw, bh)) {
+    if (draw_button("Leaderboard", bx, by, bw, bh, 20)) {
         game.lb_view_diff = game.difficulty;
         game.screen = SCREEN_LEADERBOARD;
     }
     by += bh + gap;
-    if (draw_button("Quit", bx, by, bw, bh) || IsKeyPressed(KEY_ESCAPE)) {
+    if (draw_button("Quit", bx, by, bw, bh, 20) || IsKeyPressed(KEY_ESCAPE)) {
         CloseWindow();
         exit(0);
     }
@@ -578,8 +648,8 @@ static void draw_leaderboard_screen(void) {
     int bw = 120, bh = 40;
     int bx = (game.win_w - bw) / 2;
     int by = game.win_h - 70;
-    if (draw_button("Back", bx, by, bw, bh) || IsKeyPressed(KEY_ESCAPE)) {
-        game.screen = SCREEN_MENU;
+    if (draw_button("Back", bx, by, bw, bh, 20) || IsKeyPressed(KEY_ESCAPE)) {
+        go_to_menu();
     }
 
     if (IsKeyPressed(KEY_LEFT) && game.lb_view_diff > 0) game.lb_view_diff--;
@@ -627,13 +697,16 @@ static void chord_cell(int row, int col) {
 }
 
 static bool mouse_to_cell(int *row, int *col) {
-    int mx = GetMouseX() - game.board_x;
-    int my = GetMouseY() - game.board_y;
+    float s = game.scale;
+    float stride = BASE_CELL_STRIDE * s;
+    float cs = BASE_CELL_SIZE * s;
+    float mx = GetMouseX() - game.board_x;
+    float my = GetMouseY() - game.board_y;
     if (mx < 0 || my < 0) return false;
-    int c = mx / CELL_STRIDE;
-    int r = my / CELL_STRIDE;
+    int c = (int)(mx / stride);
+    int r = (int)(my / stride);
     if (c >= game.cols || r >= game.rows) return false;
-    if (mx % CELL_STRIDE >= CELL_SIZE || my % CELL_STRIDE >= CELL_SIZE) return false;
+    if (mx - c * stride >= cs || my - r * stride >= cs) return false;
     *row = r;
     *col = c;
     return true;
@@ -642,12 +715,10 @@ static bool mouse_to_cell(int *row, int *col) {
 static void handle_playing_input(void) {
     int row, col;
 
-    // Hide cursor on mouse movement
     if (GetMouseDelta().x != 0 || GetMouseDelta().y != 0) {
         game.cursor_visible = false;
     }
 
-    // Left click - reveal (suppress if right button also down for chord)
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
         game.cursor_visible = false;
         if (mouse_to_cell(&row, &col)) {
@@ -678,7 +749,6 @@ static void handle_playing_input(void) {
         }
     }
 
-    // Right click - flag
     if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
         game.cursor_visible = false;
         if (mouse_to_cell(&row, &col)) {
@@ -693,13 +763,11 @@ static void handle_playing_input(void) {
         }
     }
 
-    // Middle click chord
     if (IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE)) {
         game.cursor_visible = false;
         if (mouse_to_cell(&row, &col)) chord_cell(row, col);
     }
 
-    // Left+right chord (edge-triggered)
     bool both_down = IsMouseButtonDown(MOUSE_BUTTON_LEFT) && IsMouseButtonDown(MOUSE_BUTTON_RIGHT);
     if (both_down && !game.prev_both_down) {
         game.cursor_visible = false;
@@ -707,13 +775,11 @@ static void handle_playing_input(void) {
     }
     game.prev_both_down = both_down;
 
-    // Arrow keys
     if (IsKeyPressed(KEY_UP))    { game.cursor_visible = true; if (game.cursor_row > 0) game.cursor_row--; }
     if (IsKeyPressed(KEY_DOWN))  { game.cursor_visible = true; if (game.cursor_row < game.rows - 1) game.cursor_row++; }
     if (IsKeyPressed(KEY_LEFT))  { game.cursor_visible = true; if (game.cursor_col > 0) game.cursor_col--; }
     if (IsKeyPressed(KEY_RIGHT)) { game.cursor_visible = true; if (game.cursor_col < game.cols - 1) game.cursor_col++; }
 
-    // Space/Enter - reveal at cursor
     if (game.cursor_visible && (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER))) {
         Cell *cell = &game.cells[game.cursor_row * game.cols + game.cursor_col];
         if (cell->state == CELL_HIDDEN) {
@@ -741,7 +807,6 @@ static void handle_playing_input(void) {
         }
     }
 
-    // F - flag at cursor
     if (game.cursor_visible && IsKeyPressed(KEY_F)) {
         Cell *cell = &game.cells[game.cursor_row * game.cols + game.cursor_col];
         if (cell->state == CELL_HIDDEN) {
@@ -753,10 +818,9 @@ static void handle_playing_input(void) {
         }
     }
 
-    // Escape - return to menu
     if (IsKeyPressed(KEY_ESCAPE)) {
         game.timer_running = false;
-        game.screen = SCREEN_MENU;
+        go_to_menu();
     }
 }
 
@@ -766,15 +830,18 @@ int main(void) {
     load_leaderboard();
 
     srand((unsigned)time(NULL));
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(game.win_w, game.win_h, "Minesweeper");
     SetMouseCursor(MOUSE_CURSOR_ARROW);
     SetExitKey(0);
     SetTargetFPS(60);
+    SetWindowMinSize(game.win_w, game.win_h);
 
     game.screen = SCREEN_MENU;
 
     while (!WindowShouldClose()) {
-        // Auto-pause check
+        update_layout();
+
         if (game.screen == SCREEN_PLAYING && !IsWindowFocused()) {
             game.timer_running = false;
             game.screen = SCREEN_PAUSED;
@@ -784,21 +851,18 @@ int main(void) {
             game.screen = SCREEN_PLAYING;
         }
 
-        // Timer
         if (game.screen == SCREEN_PLAYING && game.timer_running) {
             game.elapsed += GetFrameTime();
         }
 
-        // Input
         if (game.screen == SCREEN_PLAYING) handle_playing_input();
 
-        // Render
         BeginDrawing();
         ClearBackground(COL_WINDOW_BG);
         switch (game.screen) {
             case SCREEN_MENU:        draw_menu(); break;
             case SCREEN_PLAYING:     draw_header(); draw_board(); break;
-            case SCREEN_PAUSED:      draw_header(); draw_paused_overlay(); break;
+            case SCREEN_PAUSED:      draw_header(); draw_board(); draw_paused_overlay(); break;
             case SCREEN_GAME_OVER:   draw_header(); draw_board(); draw_game_over_overlay(); break;
             case SCREEN_GAME_WON:    draw_header(); draw_board(); draw_game_won_overlay(); break;
             case SCREEN_NAME_ENTRY:  draw_name_entry(); break;
