@@ -31,6 +31,6 @@ uninstall:
 	-update-desktop-database $(DESTDIR)$(PREFIX)/share/applications 2>/dev/null
 
 clean:
-	rm -f minesweeper minesweeper-*.png
+	rm -f minesweeper
 
 .PHONY: clean install uninstall icons
